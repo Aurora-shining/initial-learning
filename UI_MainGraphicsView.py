@@ -465,6 +465,15 @@ class MainGraphicsView(MyGraphicsView):
         # print('view pressed')
         s = event.localPos()
         g = self.mapToScene(s.x(), s.y()) / self._scale
+        #1修改，新增选中ScrawLabel
+        for label in self.labelList:
+            if isinstance(label, ScrawLabel) and not label.Die and label.contains(g):
+                for l in self.labelList:
+                    l.setSelected(False)
+                label.setSelected(True)
+                label.update()
+                break
+
         flag = False
         its = self.items(s.toPoint())
         for it in its:
@@ -1797,6 +1806,7 @@ class MainGraphicsView(MyGraphicsView):
         t_label = self.loadLabel(ScrawLabel(t_pixmap, None, self.microImg, QColor(255, 255, 255),
                                             self.current_color, type, self.operator, 1.0000))
         t_label.penWidth = self.scrawCursor.cursorWidth
+        t_label.setInteract(True)  # 1修改，保证可交互
         t_label.setInteract(True)
         t_label.prepareGeometryChange()
         return t_label
@@ -2235,8 +2245,8 @@ class MainGraphicsView(MyGraphicsView):
 
     #1修改（添加形态学变换的相关代码）
     def handleMorphologyTargetTypeChanged(self, target_type: str): #处理目标类型变化
-        if self.morphology_target_type != target_type:  # If target actually changed
-            self.resetMorphologyPreview()  # Reset previous target's preview
+        if self.morphology_target_type != target_type:
+            self.resetMorphologyPreview()
         self.morphology_target_type = target_type
         self._updateMorphologyPreview()
 
@@ -2269,49 +2279,54 @@ class MainGraphicsView(MyGraphicsView):
             if isinstance(label, ScrawLabel) and \
                     label.type == target_type and \
                     not label.Die and \
-                    label.confidence == 1.0:  # Manual annotation
+                    label.confidence == 1.0:  # 确保是人工标注的mask
                 return label
         return None
 
     def _scraw_label_to_mask(self, scraw_label: ScrawLabel) -> np.ndarray or None:
-        '''在对mask进行形态学变换之前需要对mask进行转换'''
-        if not scraw_label: return None
-        q_image = scraw_label.getPixmap().toImage()
-        q_image = q_image.convertToFormat(QImage.Format_ARGB32)  # 确保转换格式后仍然连续
+        if not scraw_label:
+            return None
 
+        # 从ScrawLabel中获取QPixmap并转换为QImage
+        q_image = scraw_label.getPixmap().toImage()
+        # 强制转换为ARGB32格式（确保包含透明度通道）
+        q_image = q_image.convertToFormat(QImage.Format_ARGB32)
+
+        # 获取图像尺寸
         width = q_image.width()
         height = q_image.height()
 
-        ptr = q_image.bits()
-        ptr.setsize(height * width * 4)
-        arr = np.array(ptr, dtype=np.uint8).reshape((height, width, 4))  # Copies data
+        # 获取图像数据的指针，并转换为NumPy数组
+        ptr = q_image.bits()  # 获取像素数据的指针
+        ptr.setsize(height * width * 4)  # 设置数据大小（ARGB四通道）
+        # 将指针数据转换为NumPy数组（形状为[高, 宽, 4]）
+        arr = np.array(ptr, dtype=np.uint8).reshape((height, width, 4))  # 这里会复制数据
 
-        # Create a binary mask from alpha channel or non-transparent pixels
-        # Assuming non-transparent pixels are part of the scraw
-        mask = (arr[:, :, 3] > 0).astype(np.uint8) * 255  # Alpha channel for transparency
+        # 从透明度通道（Alpha）生成二值Mask：
+        # - Alpha值>0的像素视为目标区域（255）
+        # - 其余为背景（0）
+        mask = (arr[:, :, 3] > 0).astype(np.uint8) * 255  # 第4通道（索引3）是Alpha通道
         return mask
 
     def _mask_to_scraw_pixmap(self, mask: np.ndarray, original_color: QColor, alpha_value: int) -> QPixmap:
         if mask is None: return QPixmap()
         h, w = mask.shape
 
-        # Create an RGBA image
         rgba_image = np.zeros((h, w, 4), dtype=np.uint8)
 
-        # Apply color to visible parts of the mask
         r, g, b, _ = original_color.getRgb()
         rgba_image[mask > 0, 0] = r
         rgba_image[mask > 0, 1] = g
         rgba_image[mask > 0, 2] = b
-        rgba_image[mask > 0, 3] = alpha_value  # Use the label's current alpha
+        rgba_image[mask > 0, 3] = alpha_value
 
         q_img = QImage(rgba_image.data, w, h, w * 4, QImage.Format_RGBA8888)
-        return QPixmap.fromImage(q_img.copy())  # Crucial .copy()
+        return QPixmap.fromImage(q_img.copy())
 
     def _apply_morph_op_to_mask(self, mask: np.ndarray, operation: str, parameter: int) -> np.ndarray or None:
         if mask is None: return None
         processed_mask = mask.copy()
-        kernel = np.ones((3, 3), np.uint8)  # Common kernel
+        kernel = np.ones((3, 3), np.uint8)
 
         try:
             if operation == "膨胀":
@@ -2323,34 +2338,23 @@ class MainGraphicsView(MyGraphicsView):
             elif operation == "闭运算":
                 processed_mask = cv2.morphologyEx(processed_mask, cv2.MORPH_CLOSE, kernel, iterations=parameter)
             elif operation == "小区域删除":
-                # skimage's remove_small_objects works on a labeled image.
-                # And it removes objects smaller than min_size.
-                # We need to invert, label, remove, and invert back if we want to fill holes.
-                # Or, directly remove small foreground objects.
-                # For removing small foreground objects:
                 processed_mask = sk_remove_small_objects(processed_mask.astype(bool), min_size=parameter).astype(
                     np.uint8) * 255
             elif operation == "骨架化":
-                # skeletonize expects a binary image (0 or 1, or True/False)
                 skeleton = skeletonize(processed_mask > 0)
                 processed_mask = skeleton.astype(np.uint8) * 255
-                if parameter > 1:  # Thicken skeleton
+                if parameter > 1:
                     skel_kernel = np.ones((parameter, parameter), np.uint8)
                     processed_mask = cv2.dilate(processed_mask, skel_kernel, iterations=1)
-            elif operation == "去枝杈":  # Original: 去枝杈
-                # This is a complex operation. A simple heuristic might be:
-                # 1. Skeletonize
-                # 2. Iteratively remove endpoints `parameter` times.
-                # This is a placeholder for a more robust pruning algorithm.
+            elif operation == "去枝杈":
                 skeleton = skeletonize(processed_mask > 0).astype(np.uint8) * 255
-                for _ in range(parameter):  # Iterations for pruning strength
-                    # A common way to find endpoints
-                    hit_miss = np.array([[-1, -1, -1], [-1, 1, -1], [0, 1, 0]], dtype=np.int8)  # Example kernel
+                for _ in range(parameter):
+                    hit_miss = np.array([[-1, -1, -1], [-1, 1, -1], [0, 1, 0]], dtype=np.int8)
                     endpoints = cv2.morphologyEx(skeleton, cv2.MORPH_HITMISS, hit_miss)
-                    skeleton[endpoints > 0] = 0  # Remove endpoints
+                    skeleton[endpoints > 0] = 0
                 processed_mask = skeleton
             elif operation == "无":
-                pass  # Return original mask
+                pass
             else:
                 print(f"Unknown morphology operation: {operation}")
                 return None
@@ -2359,43 +2363,54 @@ class MainGraphicsView(MyGraphicsView):
             return None
         return processed_mask
 
-    def _updateMorphologyPreview(self):
-        """Applies the current morphology settings as a visual preview."""
-        scraw_label = self._get_active_manual_scraw_label(self.morphology_target_type)
-        if not self.morphology_preview_active or self.morphology_original_scraw_pixmap is None:
-            self.morphology_original_scraw_pixmap = scraw_label.getPixmap().copy()  # Important: .copy()
-            self.morphology_preview_active = True
 
+
+    def _updateMorphologyPreview(self):
+        '''实时更新预览效果'''
+        scraw_label = self._get_active_manual_scraw_label(self.morphology_target_type)
 
         if not scraw_label:
-            self.resetMorphologyPreview()  # No valid label to operate on
+            if self.morphology_preview_active:
+                self.resetMorphologyPreview()  # 如果没有找到对应的 ScrawLabel，则重置预览并返回
             return
 
-        if not self.morphology_preview_active or self.morphology_original_scraw_pixmap is None:
-            # Store original pixmap if starting a new preview sequence for this label
+
+        if not self.morphology_preview_active or self.morphology_original_scraw_pixmap is None or \
+                (hasattr(self, '_last_previewed_label_id') and self._last_previewed_label_id != id(
+                    scraw_label)):  # 新增判断，如果label变了也要重新存
             self.morphology_original_scraw_pixmap = scraw_label.getPixmap().copy()
             self.morphology_preview_active = True
+            self._last_previewed_label_id = id(scraw_label) #记录当前正在预览的 ScrawLabel 的 ID，以便下次比较
 
-        # Always start from the stored original for preview calculations
         temp_label_for_masking = ScrawLabel(self.morphology_original_scraw_pixmap.copy(), None, None, QColor(),
                                             QColor(), "", "", 0.0)
         base_mask = self._scraw_label_to_mask(temp_label_for_masking)
 
-        if base_mask is None: return
+        #如果无法从原始 Pixmap 提取有效的 Mask，则重置预览并返回
+        if base_mask is None:
+            self.resetMorphologyPreview()
+            return
 
+        #应用当前的形态学变换操作
         transformed_mask = self._apply_morph_op_to_mask(base_mask, self.morphology_operation, self.morphology_parameter)
 
+        #根据变换结果更新实际ScrawLabel的显示
         if transformed_mask is not None:
             preview_pixmap = self._mask_to_scraw_pixmap(transformed_mask, scraw_label.backColor,
                                                         scraw_label.alpha if not scraw_label.isSelected() else scraw_label.alphaSelect)
+            #将预览的Pixmap设置到实际的ScrawLabel上
             scraw_label.setPixmap(preview_pixmap)
             scraw_label.update()
             self.viewport().update()
-        else:  # Operation failed or no change
-            self.resetMorphologyPreview()
+        else:  # 若变换操作失败或没有产生变化，则回到本次预览开始时的状态
+            if self.morphology_original_scraw_pixmap:
+                scraw_label.setPixmap(self.morphology_original_scraw_pixmap.copy())
+                scraw_label.update()
+                self.viewport().update()
+                self.resetMorphologyPreview()
 
-    def confirmMorphologyApplication(self, is_reset=False):
-        """Makes the current morphological preview permanent or resets."""
+    def confirmMorphologyApplication(self, is_confirm):
+        """确定应用当前的形态学变换或重置形态学变换"""
         if not self.morphology_preview_active or not self.morphology_target_type:
             return
 
@@ -2405,31 +2420,27 @@ class MainGraphicsView(MyGraphicsView):
             self.morphology_original_scraw_pixmap = None
             return
 
-        if is_reset or self.morphology_operation == "无":  # If confirming a "无" operation, it's like a reset
+        if is_confirm:
+            # 确认应用变换，保存修改
+            self.needSaveItem.emit(True)
+        else:
+            # 取消变换，恢复原始状态
             if self.morphology_original_scraw_pixmap:
-                scraw_label.setPixmap(self.morphology_original_scraw_pixmap)
+                scraw_label.setPixmap(self.morphology_original_scraw_pixmap.copy())
 
-
-        # After confirm (or reset confirm), clear the "original" backup for this preview session
+            # 重置预览状态
         self.morphology_original_scraw_pixmap = None
         self.morphology_preview_active = False
         scraw_label.update()
         self.viewport().update()
-        # Potentially save changes to project here if morphology affects savable data directly.
-        # For scraw, it's mainly the pixmap.
-        self.needSaveItem.emit(True)  # Or directly call mainWin.save if appropriate connection exists
-        if hasattr(self.mainWin, 'save') and hasattr(self.mainWin, 'fileList') and self.mainWin.lastFileIndex != -1:
-            current_file_path = self.mainWin.fileList[self.mainWin.lastFileIndex].get('path')
-            if current_file_path:
-                self.mainWin.save(current_file_path)
 
     def resetMorphologyState(self):
         """重置形态学变换状态"""
-        self.current_morph_operation = "无"
-        self.morph_iterations = 1
-        self.region_size = 100
-        self.skeleton_width = 2
-        self.has_applied_morph = False
+        self.morphology_target_type = None
+        self.morphology_operation = "无"
+        self.morphology_parameter = 1
+        self.morphology_original_scraw_pixmap = None
+        self.morphology_preview_active = False
 
         # 重置时恢复原始mask显示
         if self.original_mask is not None:
@@ -2454,70 +2465,16 @@ class MainGraphicsView(MyGraphicsView):
 
         self.processed_mask = processed
 
-    def sk_remove_small_objects(self, mask):
-        """移除小区域"""
-        # 找到所有连通区域
-        num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(mask, 8, cv2.CV_32S)
+    #此处删掉了了小区域删除的相关代码，直接使用从skimage里导入的库
 
-        # 创建一个新mask
-        new_mask = np.zeros_like(mask)
+    #骨架化在操作类型相关的槽函数里已经写了，使用的是skimage里的相关库
 
-        # 遍历所有区域，保留大于阈值的区域
-        for i in range(1, num_labels):
-            if stats[i, cv2.CC_STAT_AREA] >= self.region_size:
-                new_mask[labels == i] = 255
-        return new_mask
 
-    def _skeletonize(self, mask):
-        """骨架化"""
-        skeleton = np.zeros_like(mask)
-        element = cv2.getStructuringElement(cv2.MORPH_CROSS, (3, 3))
-
-        while True:
-            eroded = cv2.erode(mask, element)
-            temp = cv2.dilate(eroded, element)
-            temp = cv2.subtract(mask, temp)
-            skeleton = cv2.bitwise_or(skeleton, temp)
-            mask = eroded.copy()
-
-            if cv2.countNonZero(mask) == 0:
-                break
-
-        # 根据参数调整骨架宽度
-        if self.skeleton_width > 1:
-            kernel = np.ones((self.skeleton_width, self.skeleton_width), np.uint8)
-            skeleton = cv2.dilate(skeleton, kernel)
-
-        return skeleton
-
-    def _prune(self, mask):
-        """去枝权"""
-        # 这是一个简化的实现
-        skeleton = self._skeletonize(mask)
-        endpoints = self._findEndpoints(skeleton)
-
-        # 从端点开始腐蚀
-        kernel = np.ones((3, 3), np.uint8)
-        for _ in range(self.morph_iterations):
-            skeleton = cv2.erode(skeleton, kernel)
-            skeleton = cv2.bitwise_and(skeleton, mask)
-
-        return skeleton
-
-    def _findEndpoints(self, skeleton):
-        """找到骨架的端点"""
-        kernel = np.array([[1, 1, 1],
-                           [1, 10, 1],
-                           [1, 1, 1]], dtype=np.uint8)
-
-        filtered = cv2.filter2D(skeleton, cv2.CV_8U, kernel)
-        return (filtered == 11).astype(np.uint8) * 255
 
     def updateMorphologyDisplay(self):
         """更新形态学变换的显示"""
         if self.processed_mask is not None:
             # 这里实现更新显示的逻辑
-            # 例如：更新涂鸦层的mask
             scraw_label = self.getLabel(self.current_target_type, 'Scraw')
             if scraw_label is None:
                 scraw_label = self.addNewScrawLabel(self.current_target_type)
@@ -2539,9 +2496,8 @@ class MainGraphicsView(MyGraphicsView):
     def onImageChanged(self):
         """当图像切换时调用"""
         # 重置形态学变换状态
+        super().onImageChanged()
         self.resetMorphologyState()
-        self.original_mask = None
-        self.processed_mask = None
 
     def loadOriginalMask(self):
         """加载原始人工标注mask"""

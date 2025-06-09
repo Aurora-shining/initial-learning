@@ -15,6 +15,7 @@ class Morphology(FoldingBarItem):
     OperationTypeChanged = pyqtSignal(str)
     ParameterChanged = pyqtSignal(int)
     MorphologyReset = pyqtSignal()
+    MorphologyConfirm = pyqtSignal(bool)
 
     def __init__(self, parent):
         super(Morphology, self).__init__()
@@ -35,7 +36,7 @@ class Morphology(FoldingBarItem):
 
         # 初始化操作类型下拉框
         self.mainWin.comboBoxOperationType.clear()
-        operations = ["无", "膨胀", "腐蚀", "开运算", "闭运算", "小区域删除", "骨架化", "去枝权"]
+        operations = ["无", "膨胀", "腐蚀", "开运算", "闭运算", "小区域删除", "骨架化", "去枝杈"]
         for op in operations:
             self.mainWin.comboBoxOperationType.addItem(op)
 
@@ -59,76 +60,75 @@ class Morphology(FoldingBarItem):
         self.toSave = False
 
     def show(self) -> None:
-        self.project = self.parent.project  # parent is MainWin
-        # 初始化目标类型下拉框
-        self.mainWin.comboBoxTargetType.clear()
-        if self.project and hasattr(self.project, 'classes'):
-            for cls_data in self.project.classes:  # Assuming classes is a list of dicts with 'type'
-                self.mainWin.comboBoxTargetType.addItem(cls_data['type'])
+        self.project = self.parent.project
+        self._refresh_target_types()
 
-        # Enable/disable based on conditions
-        self.parent.check_morphology_conditions_and_show()  # Call MainWin's check
+        # 先禁用所有操作控件
+        self._disable_controls()
 
-        # Resetting UI to defaults should happen after check, or be part of check
-        # self.reset() # reset might disable things again if called before check
-        super().show()  # Call super().show() after internal setup
-        # If reset is needed, ensure it respects the enabled state from check_morphology_conditions_and_show
+        # 如果有目标类型可选，则启用基本控件
         if self.mainWin.comboBoxTargetType.count() > 0:
-            if not self.targetType:  # If targetType not set, default to first
+            if not self.targetType:  # self.targetType 是在 stateInit 中初始化为 ""
                 self.mainWin.comboBoxTargetType.setCurrentIndex(0)
                 self.onTargetTypeChanged(self.mainWin.comboBoxTargetType.currentText())
-        else:  # No types, definitely disable
-            self.win.setEnabled(False)
-            self.mainWin.comboBoxOperationType.setEnabled(False)
-            self.mainWin.sliderParameterName.setEnabled(False)
-            self.mainWin.pBtnApplyMorphological.setEnabled(False)
-
-        # If still "无", ensure slider is set to a sensible default
-        if self.mainWin.comboBoxOperationType.currentText() == "无":
-            self.mainWin.sliderParameterName.setValue(1)
-            self.updateParamValue()
+        super().show()
+        self.parent.check_morphology_conditions_and_show()
 
     def hide(self) -> None:
         if not self.toSave:
             self.cancel()
         return super().hide()
 
+    def _disable_controls(self):
+        """禁用形态学操作相关控件"""
+        self.win.setEnabled(False)
+        self.mainWin.comboBoxOperationType.setEnabled(False)
+        self.mainWin.sliderParameterName.setEnabled(False)
+        self.mainWin.pBtnApplyMorphological.setEnabled(False)
+
+    def _refresh_target_types(self):
+        """刷新目标类型下拉框内容"""
+        self.mainWin.comboBoxTargetType.clear()
+        if self.project and hasattr(self.project, 'classes'):
+            for cls_data in self.project.classes:
+                self.mainWin.comboBoxTargetType.addItem(cls_data['type'])
+
+        #根据下拉框是否为空，自动启用/禁用控件
+        if self.mainWin.comboBoxTargetType.count() == 0:
+            self._disable_controls()
+        else:
+            self.win.setEnabled(True)
+            self.mainWin.comboBoxOperationType.setEnabled(True)
+            self.mainWin.sliderParameterName.setEnabled(True)
+            self.mainWin.pBtnApplyMorphological.setEnabled(True)
+
     def update_parameter_name(self):
         current_operation = self.mainWin.comboBoxOperationType.currentText()
         base_text = "参数名："
-        min_val, max_val, current_val = 1, 10, 1
+        min_val, max_val = 1, 10
 
-        if current_operation in ["膨胀", "腐蚀", "开运算", "闭运算", "去枝杈"]:  # Corrected 去枝杈
+        if current_operation in ["膨胀", "腐蚀", "开运算", "闭运算", "去枝杈"]:
             base_text = "迭代次数："
-            min_val, max_val, current_val = 1, 10, 1  # Example range
+            min_val, max_val = 1, 10
         elif current_operation == "小区域删除":
             base_text = "区域大小："
-            min_val, max_val, current_val = 1, 1000, 1  # Example range
+            min_val, max_val = 1, 1000
         elif current_operation == "骨架化":
             base_text = "骨架宽度："
-            min_val, max_val, current_val = 1, 10, 1  # Example range for thickening
+            min_val, max_val = 1, 10
 
         self.mainWin.sliderParameterName.setMinimum(min_val)
         self.mainWin.sliderParameterName.setMaximum(max_val)
 
-        # Try to keep existing value if in new range, else set to default for op
-        if min_val <= self.parameterValue <= max_val:
-            self.mainWin.sliderParameterName.setValue(self.parameterValue)
-        else:
-            self.mainWin.sliderParameterName.setValue(current_val)
-            self.parameterValue = current_val  # Update internal state
-
-        self.mainWin.labelParameterName.setText(f"{base_text}")  # Just the name
+        self.mainWin.labelParameterName.setText(f"{base_text}")
         self.mainWin.labelParameterNameMin.setText(str(min_val))
         self.mainWin.labelParameterNameMax.setText(str(max_val))
-        # The slider's valueChanged signal will call onParameterChanged -> updateParamValue
-        # So we don't need to set the text with value here directly.
-        # Force an update of the displayed value if the slider didn't change but its meaning did
         self.updateParamValue()
 
 
     def updateParamValue(self):
         self.parameterValue = self.mainWin.sliderParameterName.value()
+        self.mainWin.sliderParameterName.setValue(self.parameterValue)
         self.ParameterChanged.emit(self.parameterValue)
 
     def onTargetTypeChanged(self, targetType):
@@ -137,9 +137,10 @@ class Morphology(FoldingBarItem):
 
     def onOperationTypeChanged(self, operationType):
         self.operationType = operationType
-        self.update_parameter_name()
+        self.update_parameter_name()  # 这个会设置滑块的值和范围
         self.OperationTypeChanged.emit(operationType)
-        self.parent.check_morphology_condictions_and_show()
+        self.ParameterChanged.emit(self.mainWin.sliderParameterName.value()) # 确保参数也更新
+        self.parent.check_morphology_conditions_and_show()
 
     def onParameterChanged(self, value):
         self.parameterValue = value
@@ -149,8 +150,10 @@ class Morphology(FoldingBarItem):
         self.toSave = True
         if self.operationType == "无":
             self.MorphologyReset.emit()
+            self.MorphologyConfirm.emit(False)  # 发送重置信号
         else:
-            self.parent.MainGraphicsView.confirmMorphologyApplication()
+            # 发送确认应用信号
+            self.MorphologyConfirm.emit(True)
 
         self.hide()
         self.reset()

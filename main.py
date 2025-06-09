@@ -201,15 +201,18 @@ class MainWin(QMainWindow, WidgetWinCustom):
         # 预分割缓存
         self.preSegCache = {}
 
-        #1修改（增加标注后处理之下的两个小窗口，标注展示和形态学变换）
+        #1修改（增加标注后处理之下的两个小窗口，标注展示和形态学变换，仿照原图增强窗口来）
         self.ui.verticalLayout_processing.setAlignment(Qt.AlignTop)
-        self.labelShowWin = LabelShow(self)
+        self.labelShowWin = LabelShow(self) #标注展示窗口1
         self.ui.verticalLayout_processing.addWidget(self.labelShowWin)
         self.foldingWins.append(self.labelShowWin)
 
-        self.morphologyWin = Morphology(self)
+        self.morphologyWin = Morphology(self) #形态学变换窗口2
         self.ui.verticalLayout_processing.addWidget(self.morphologyWin)
         self.foldingWins.append(self.morphologyWin)
+
+        self.signalProjectClassesChanged = pyqtSignal()  #1修改
+        self.signalProjectClassesChanged.connect(self.on_project_classes_changed)#1修改
 
 
         # 弹窗
@@ -559,7 +562,7 @@ class MainWin(QMainWindow, WidgetWinCustom):
         self.ui.toolButtonStatisticsToBrief.clicked.connect(lambda: self.transWidgetStatistics(True))
         self.ui.pushButtonEnhancement.clicked.connect(lambda: self.transWidgetEnhancement())
         self.ui.pushButtonSegmentation.clicked.connect(lambda: self.transWidgetSegmentation())
-        #1修改
+        #1修改 ，窗口的切换槽函数
         self.ui.pushButtonProcessing.clicked.connect(lambda: self.transWidgetProcessing())
         self.ui.pBtnReset.clicked.connect(self.showResetWin)
 
@@ -594,12 +597,13 @@ class MainWin(QMainWindow, WidgetWinCustom):
         #1修改 右侧折叠栏标注展示
         self.labelShowWin.AlphaChanged.connect(self.MainGraphicsView.changeAlpha)
         self.labelShowWin.AlphaSelectChanged.connect(self.MainGraphicsView.changeAlphaSelect)
-        #self.labelShowWin.InstanceColorChanged.connect(self.MainGraphicsView.chengeInstanceColor) #这一部分先空着
+        #self.labelShowWin.InstanceColorChanged.connect(self.MainGraphicsView.chengeInstanceColor) #实例颜色不着急，这一部分先空着
         #1修改 形态学变换的信号连接
         self.morphologyWin.TargetTypeChanged.connect(self.MainGraphicsView.handleMorphologyTargetTypeChanged)
         self.morphologyWin.OperationTypeChanged.connect(self.MainGraphicsView.handleMorphologyOperationChanged)
         self.morphologyWin.ParameterChanged.connect(self.MainGraphicsView.handleMorphologyParameterChanged)
         self.morphologyWin.MorphologyReset.connect(self.MainGraphicsView.resetMorphologyPreview)
+        self.morphologyWin.MorphologyConfirm.connect(self.MainGraphicsView.confirmMorphologyApplication)
 
         # 主视图
         self.ui.horizontalSliderThreshold.valueChanged.connect(self.setResThreshold)
@@ -792,7 +796,13 @@ class MainWin(QMainWindow, WidgetWinCustom):
         self.setPartitionTagWin = SetPartitionTag(self.project, self)
         self.setPartitionTagWin.setWindowModality(Qt.WindowModality.ApplicationModal)
         self.setPartitionTagWin.PartitionChanged.connect(self.updateLabelColor)
+        self.signalProjectClassesChanged.connect(self.on_project_classes_changed)  #1修改
         self.setPartitionTagWin.show()
+
+    #1修改（新增函数）
+    def on_project_classes_changed(self):
+        if hasattr(self, "morphologyWin"):
+            self.morphologyWin._refresh_target_types()
 
     # 打开标尺设置窗口
     def showSetRulerWin(self):
@@ -2896,7 +2906,7 @@ class MainWin(QMainWindow, WidgetWinCustom):
         if self.histogramAdjustmentWin.ui.toolButtonFold.isChecked():
             self.histogramAdjustmentWin.ui.toolButtonFold.setChecked(False)
             self.histogramAdjustmentWin.trans()
-        #1修改，此处要添加Widget的可见性
+        #1修改，此处要添加ProcessingWidget的可见性
         if self.labelShowWin.ui.toolButtonFold.isChecked():
             self.labelShowWin.ui.toolButtonFold.setChecked(False)
             self.labelShowWin.trans()
@@ -2941,14 +2951,6 @@ class MainWin(QMainWindow, WidgetWinCustom):
         typeList = list(self.project.getTypes())
         for i in range(self.ui.tableWidget.rowCount()):
             self.MainGraphicsView.setLabelHide(typeList[i], self.project.getShowByType(typeList[i]))
-
-        #1修改
-        if self.labelShowWin.ui.toolButtonFold.isChecked():
-            self.labelShowWin.show()
-        if self.morphologyWin.ui.toolButtonFold.isChecked():
-            self.MainGraphicsView.resetMorphologyPreview()  # Clear visual preview
-            self.morphologyWin.reset()  # Reset Morphology panel UI
-            self.check_morphology_conditions_and_show()  # Re-check conditions for new image
 
     '''
     顶部工具栏
@@ -3872,7 +3874,7 @@ class MainWin(QMainWindow, WidgetWinCustom):
         self.ui.widgetSegmentation.setVisible(True)
         #1修改
         self.ui.widgetProcessing.setVisible(False)
-        self.ui.pushButtonProcessing.setChecked(False)
+        #self.ui.pushButtonProcessing.setChecked(False)
 
         if hasattr(self,'thresholdSegmentationWin') and self.thresholdSegmentationWin.ui.toolButtonFold.isChecked():
             self.thresholdSegmentationWin.show()
@@ -3884,7 +3886,7 @@ class MainWin(QMainWindow, WidgetWinCustom):
         self.ui.widgetEnhancement.setVisible(True)
         self.ui.widgetSegmentation.setVisible(False)
         #1修改
-        self.ui.pushButtonProcessing.setChecked(False)
+        #self.ui.pushButtonProcessing.setChecked(False)
         self.ui.widgetProcessing.setVisible(False)
 
         if hasattr(self,'thresholdSegmentationWin') and self.thresholdSegmentationWin.ui.toolButtonFold.isChecked():
@@ -3893,24 +3895,20 @@ class MainWin(QMainWindow, WidgetWinCustom):
 
     #1修改
     def transWidgetProcessing(self):
-        self.ui.pushButtonEnhancement.setChecked(False)
-        self.ui.pushButtonSegmentation.setChecked(False)
         self.ui.pushButtonProcessing.setChecked(True)
-
+        self.ui.widgetProcessing.setVisible(True)
         self.ui.widgetEnhancement.setVisible(False)
         self.ui.widgetSegmentation.setVisible(False)
-        self.ui.widgetProcessing.setVisible(True)
 
-        # Hide previews from other sections if they were active
         if hasattr(self, 'thresholdSegmentationWin') and self.thresholdSegmentationWin.ui.toolButtonFold.isChecked():
             self.thresholdSegmentationWin.hide()  # Or specific preview reset
 
         self.ui.labelMethod.setText('标注后处理方法：')
-        if self.labelShowWin.ui.toolButtonFold.isChecked():
-            self.labelShowWin.show()
-        if self.morphologyWin.ui.toolButtonFold.isChecked():
-            self.morphologyWin.show()
-            self.check_morphology_conditions_and_show()
+        # if self.labelShowWin.ui.toolButtonFold.isChecked():
+        #     self.labelShowWin.show()
+        # if self.morphologyWin.ui.toolButtonFold.isChecked():
+        #     self.morphologyWin.show()
+        #     self.check_morphology_conditions_and_show()
 
 
 
@@ -3933,12 +3931,11 @@ class MainWin(QMainWindow, WidgetWinCustom):
             self.cancelWin.ui.labelTitle.setText("标注后处理")
             self.cancelWin.ui.pBtnOK.setText("重置")
             self.cancelWin.ui.labelSelections.setText(
-                "请问是否要重置当前图像的标注后处理效果？\n（仅重置未应用的预览，不影响已应用结果或原始标注）")  # Clarified text
+                "请问是否要重置当前图像的标注后处理效果？")
             self.cancelWin.signalCloseDelete.connect(self.resetProcessing)
 
     #1修改，重置标注后处理（之后再写完整）
     def resetProcessing(self):
-        # Reset LabelShow panel and its effect
         if hasattr(self.project, 'labelAlpha') and hasattr(self.project, 'labelAlphaSelect'):
             self.labelShowWin.AlphaChanged.emit(self.project.labelAlpha)
             self.labelShowWin.AlphaSelectChanged.emit(self.project.labelAlphaSelect)
@@ -3946,19 +3943,12 @@ class MainWin(QMainWindow, WidgetWinCustom):
                 self.labelShowWin.transparency(self.project.labelAlpha))
             self.labelShowWin.mainWin.sliderSelectedTransparency.setValue(
                 self.labelShowWin.transparency(self.project.labelAlphaSelect))
-        else:  # Fallback to defaults if project attributes aren't set
-            defaultAlpha = 127
-            defaultAlphaSelect = 191
-            self.labelShowWin.AlphaChanged.emit(defaultAlpha)
-            self.labelShowWin.AlphaSelectChanged.emit(defaultAlphaSelect)
-            self.labelShowWin.mainWin.sliderTransparency.setValue(self.labelShowWin.transparency(defaultAlpha))
-            self.labelShowWin.mainWin.sliderSelectedTransparency.setValue(
-                self.labelShowWin.transparency(defaultAlphaSelect))
+        else:
+            self.labelShowWin.reset()
 
-        # Reset Morphology preview and UI
+        # 重置形态学变换
         self.MainGraphicsView.resetMorphologyPreview()
-        self.morphologyWin.reset()  # Resets UI to default and emits MorphologyReset
-        # Re-check conditions after reset
+        self.morphologyWin.reset()
         self.check_morphology_conditions_and_show()
 
     def resetPreSegLabel(self):
@@ -4169,60 +4159,58 @@ class MainWin(QMainWindow, WidgetWinCustom):
 
     #1修改，定义函数只对人工标注的mask做形态学变换
     def check_morphology_conditions_and_show(self):
-        """Checks conditions before fully enabling/showing morphology panel."""
-        if not self.morphologyWin.ui.toolButtonFold.isChecked():  # Only act if it's supposed to be open
+        if not hasattr(self, 'morphologyWin') or self.lastFileIndex == -1:
+            if hasattr(self, 'morphologyWin'):
+                self.morphologyWin.win.setEnabled(False)
+                self.morphologyWin.mainWin.comboBoxOperationType.setEnabled(False)
+                self.morphologyWin.mainWin.sliderParameterName.setEnabled(False)
+                self.morphologyWin.mainWin.pBtnApplyMorphological.setEnabled(False)
             return
-
-        active_manual_scraw = False
-        has_predicted_scraw_for_target = False
-        has_any_predicted_scraw = False
 
         current_target_type = self.morphologyWin.mainWin.comboBoxTargetType.currentText()
         if not current_target_type and self.morphologyWin.mainWin.comboBoxTargetType.count() > 0:
             current_target_type = self.morphologyWin.mainWin.comboBoxTargetType.itemText(0)
 
-        if self.lastFileIndex != -1:  # Check if an image is loaded
-            for label in self.MainGraphicsView.getLabelList():  # Use getLabelList for active labels
-                if isinstance(label, ScrawLabel) and not label.Die:
-                    if label.type == current_target_type:
-                        if label.confidence == 1.0:
-                            active_manual_scraw = True
-                        else:  # confidence < 1.0 implies predicted
-                            has_predicted_scraw_for_target = True
-                    if label.confidence != 1.0:  # Check any predicted scraw
-                        has_any_predicted_scraw = True
-        else:  # No image loaded
-            self.morphologyWin.win.setEnabled(False)
-            self.morphologyWin.mainWin.comboBoxOperationType.setEnabled(False)
-            self.morphologyWin.mainWin.sliderParameterName.setEnabled(False)
-            self.morphologyWin.mainWin.pBtnApplyMorphological.setEnabled(False)
-            self.MainGraphicsView.resetMorphologyPreview()
-            return
+        active_manual_scraw_for_target = False
+        has_predicted_scraw_for_target = False  # 是否有针对当前目标类型的预测涂鸦
+        has_any_manual_scraw = False
 
-        enable_morphology = active_manual_scraw
+        for label in self.MainGraphicsView.getLabelList():
+            if isinstance(label, ScrawLabel) and not label.Die:
+                if label.confidence == 1.0:  # 人工标注
+                    has_any_manual_scraw = True
+                    if label.type == current_target_type:
+                        active_manual_scraw_for_target = True
+                elif label.type == current_target_type:  # 预测标注
+                    has_predicted_scraw_for_target = True
+
+        enable_morphology = active_manual_scraw_for_target
+
+        self.morphologyWin.win.setEnabled(enable_morphology)
+        self.morphologyWin.mainWin.comboBoxOperationType.setEnabled(enable_morphology)
+        self.morphologyWin.mainWin.sliderParameterName.setEnabled(enable_morphology)
+        self.morphologyWin.mainWin.pBtnApplyMorphological.setEnabled(enable_morphology)
 
         if not enable_morphology:
-            self.morphologyWin.win.setEnabled(False)  # Disable the content widget
-            self.morphologyWin.mainWin.comboBoxOperationType.setEnabled(False)
-            self.morphologyWin.mainWin.sliderParameterName.setEnabled(False)
-            self.morphologyWin.mainWin.pBtnApplyMorphological.setEnabled(False)
-            if has_any_predicted_scraw or has_predicted_scraw_for_target:
-                alertInfo(self, "提示",
-                          "当前图像中含有已预测或非人工画刷标注，请确认或转换为人工画刷标注后再进行形态学后处理。")
-            elif not current_target_type:
-                alertInfo(self, "提示", "请先在左上角“设定目标类型”中定义类别。")
-            elif self.morphologyWin.mainWin.comboBoxTargetType.count() == 0:
-                alertInfo(self, "提示", "请先在左上角“设定目标类型”中定义类别。")
-            else:
-                alertInfo(self, "提示", f"当前图像没有“{current_target_type}”类型的人工画刷标注，请标注后再进行后处理。")
-            self.MainGraphicsView.resetMorphologyPreview()
-        else:
-            self.morphologyWin.win.setEnabled(True)
-            self.morphologyWin.mainWin.comboBoxOperationType.setEnabled(True)
-            self.morphologyWin.mainWin.sliderParameterName.setEnabled(True)
-            self.morphologyWin.mainWin.pBtnApplyMorphological.setEnabled(True)
-            # Trigger an initial preview update for the current settings
-            self.MainGraphicsView.handleMorphologyTargetTypeChanged(current_target_type)
+            self.MainGraphicsView.resetMorphologyPreview()  # 如果不满足条件，重置预览
+            if not current_target_type and self.morphologyWin.mainWin.comboBoxTargetType.count() == 0:
+                alertInfo(self, "提示", "请先在“编辑-设定目标类型”中定义类别。")
+            elif not active_manual_scraw_for_target and current_target_type:
+                if has_predicted_scraw_for_target:
+                    alertInfo(self, "提示",
+                              f"目标类型“{current_target_type}”存在预测涂鸦，请先将其转换为人工标注，再进行形态学处理。")
+                else:
+                    alertInfo(self, "提示",
+                              f"当前图像没有“{current_target_type}”类型的人工画刷标注，请标注后再进行后处理。")
+            elif not has_any_manual_scraw: # 只有在完全没有任何手动涂鸦时才提示这个
+                alertInfo(self, "提示", "当前图像没有人工画刷标注，请标注后再进行后处理。")
+
+        else:  # 条件满足，可以触发一次更新
+            self.MainGraphicsView.handleMorphologyTargetTypeChanged(current_target_type)  # 确保预览基于当前类型
+            self.MainGraphicsView.handleMorphologyOperationChanged(
+                self.morphologyWin.mainWin.comboBoxOperationType.currentText())
+            self.MainGraphicsView.handleMorphologyParameterChanged(
+                self.morphologyWin.mainWin.sliderParameterName.value())
 
     def _connect_morphology_signals(self):
         """连接形态学操作信号"""
